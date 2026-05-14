@@ -21,8 +21,16 @@ interface SarvamConfig {
 interface SarvamChatCompletionRequest {
 	messages: Array<{
 		role: "user" | "assistant" | "system" | "tool";
-		content: string;
+		content?: string | null;
 		tool_call_id?: string;
+		tool_calls?: Array<{
+			id: string;
+			type: "function";
+			function: {
+				name: string;
+				arguments: string;
+			};
+		}>;
 	}>;
 	model: string;
 	temperature?: number;
@@ -99,6 +107,12 @@ interface SarvamStreamChunk {
 			| "function_call"
 			| null;
 	}>;
+}
+
+interface SarvamToolCallState {
+	id?: string;
+	name?: string;
+	arguments: string;
 }
 
 type SarvamModels = "sarvam-105b" | "sarvam-30b" | "sarvam-m";
@@ -263,22 +277,30 @@ export class SarvamLlm extends BaseLlm {
 		contents: Content[],
 	): SarvamChatCompletionRequest["messages"] {
 		return contents.map((content) => {
+			const parts = content.parts ?? [];
+
 			// Check if any part is a functionResponse
-			const functionResponsePart = content.parts?.find(
+			const functionResponsePart = parts.find(
 				(part: any) => part.functionResponse,
 			);
 
 			if (functionResponsePart) {
+				const functionResponse = functionResponsePart.functionResponse;
+				const toolCallId =
+					functionResponse?.id ??
+					functionResponse?.tool_call_id ??
+					functionResponse?.name;
+
 				// Create a tool message for function responses
 				const message: SarvamChatCompletionRequest["messages"][0] = {
 					role: "tool",
-					content: JSON.stringify(
-						functionResponsePart.functionResponse?.response,
-					),
-					tool_call_id: functionResponsePart.functionResponse?.name,
+					content: JSON.stringify(functionResponse?.response ?? null),
+					tool_call_id: toolCallId,
 				};
 				return message;
 			}
+
+			const functionCallParts = parts.filter((part: any) => part.functionCall);
 
 			// Process regular text messages
 			let role = content.role || "user";
@@ -289,8 +311,8 @@ export class SarvamLlm extends BaseLlm {
 			let text = "";
 
 			// Extract text from parts
-			if (content.parts && Array.isArray(content.parts)) {
-				text = content.parts
+			if (parts && Array.isArray(parts)) {
+				text = parts
 					.map((part: any) => {
 						if (typeof part.text === "string") {
 							return part.text;
@@ -298,6 +320,36 @@ export class SarvamLlm extends BaseLlm {
 						return "";
 					})
 					.join("");
+			}
+
+			if (functionCallParts.length > 0) {
+				const tool_calls = functionCallParts.map((part: any, index: number) => {
+					const functionCall = part.functionCall;
+					const toolCallId =
+						functionCall?.id ??
+						functionCall?.tool_call_id ??
+						functionCall?.name ??
+						`toolcall-${index}`;
+
+					return {
+						id: toolCallId,
+						type: "function" as const,
+						function: {
+							name: functionCall?.name || "",
+							arguments: this.stringifyFunctionArguments(
+								functionCall?.args ?? functionCall?.arguments,
+							),
+						},
+					};
+				});
+
+				const message: SarvamChatCompletionRequest["messages"][0] = {
+					role: role as "user" | "assistant" | "system" | "tool",
+					content: text || "",
+					tool_calls,
+				};
+
+				return message;
 			}
 
 			const message: SarvamChatCompletionRequest["messages"][0] = {
@@ -341,6 +393,68 @@ export class SarvamLlm extends BaseLlm {
 		}
 	}
 
+	private stringifyFunctionArguments(args: unknown): string {
+		if (typeof args === "string") {
+			return args;
+		}
+		if (args === undefined) {
+			return "";
+		}
+		try {
+			return JSON.stringify(args);
+		} catch (error) {
+			if (this.log) {
+				console.log("[SarvamLlm] failed to stringify function args:", args);
+			}
+			return String(args);
+		}
+	}
+
+	private safeJsonParse(value: string | undefined): unknown {
+		if (value === undefined) {
+			return {};
+		}
+		if (typeof value !== "string") {
+			return value;
+		}
+		if (value.trim() === "") {
+			return {};
+		}
+		try {
+			return JSON.parse(value);
+		} catch (error) {
+			if (this.log) {
+				console.log("[SarvamLlm] failed to parse JSON args:", value);
+			}
+			return value;
+		}
+	}
+
+	private buildToolCallResponse(
+		toolCallState: Map<number, SarvamToolCallState>,
+		finishReason?: LlmResponse["finishReason"],
+	): LlmResponse {
+		const orderedCalls = Array.from(toolCallState.entries())
+			.sort(([a], [b]) => a - b)
+			.map(([, state]) => ({
+				functionCall: {
+					name: state.name || "",
+					args: this.safeJsonParse(state.arguments),
+					id: state.id,
+				} as any,
+			}));
+
+		return {
+			content: {
+				role: "model",
+				parts: orderedCalls,
+			},
+			partial: false,
+			turnComplete: true,
+			finishReason,
+		};
+	}
+
 	/**
 	 * Handles streaming response from Sarvam API
 	 */
@@ -350,6 +464,104 @@ export class SarvamLlm extends BaseLlm {
 		const reader = body.getReader();
 		const decoder = new TextDecoder();
 		let buffer = "";
+		let eventDataLines: string[] = [];
+		const toolCallState = new Map<number, SarvamToolCallState>();
+
+		const handleData = (data: string, logFinal: boolean = false) => {
+			const responses: LlmResponse[] = [];
+
+			if (data === "[DONE]") {
+				if (toolCallState.size > 0) {
+					responses.push(this.buildToolCallResponse(toolCallState));
+					toolCallState.clear();
+				}
+				responses.push({ turnComplete: true });
+				return responses;
+			}
+
+			if (!data) {
+				return responses;
+			}
+
+			try {
+				const chunk = JSON.parse(data) as SarvamStreamChunk;
+				if (this.log) {
+					console.log(
+						"[SarvamLlm] stream chunk:",
+						JSON.stringify(chunk.choices[0]?.delta, null, 2),
+					);
+					if (logFinal) {
+						console.log(
+							"[SarvamLlm] stream chunk (final):",
+							JSON.stringify(chunk, null, 2),
+						);
+					}
+				}
+
+				const choice = chunk.choices?.[0];
+				if (!choice) {
+					return responses;
+				}
+
+				const delta = choice.delta;
+				const finishReason = choice.finish_reason
+					? (choice.finish_reason.toUpperCase() as LlmResponse["finishReason"])
+					: undefined;
+				let emittedContent = false;
+
+				if (delta?.tool_calls && delta.tool_calls.length > 0) {
+					for (const toolCall of delta.tool_calls) {
+						const index = toolCall.index ?? 0;
+						const current =
+							toolCallState.get(index) ||
+							({ arguments: "" } as SarvamToolCallState);
+
+						if (toolCall.id) {
+							current.id = toolCall.id;
+						}
+						if (toolCall.function?.name) {
+							current.name = toolCall.function.name;
+						}
+						if (typeof toolCall.function?.arguments === "string") {
+							current.arguments += toolCall.function.arguments;
+						}
+
+						toolCallState.set(index, current);
+					}
+				}
+
+				if (delta?.content) {
+					emittedContent = true;
+					responses.push({
+						content: {
+							role: "model",
+							parts: [{ text: delta.content }],
+						},
+						partial: !choice.finish_reason,
+						turnComplete: choice.finish_reason ? true : false,
+						finishReason,
+					});
+				}
+
+				if (choice.finish_reason) {
+					if (toolCallState.size > 0) {
+						responses.push(
+							this.buildToolCallResponse(toolCallState, finishReason),
+						);
+						toolCallState.clear();
+					} else if (!emittedContent) {
+						responses.push({
+							turnComplete: true,
+							finishReason,
+						});
+					}
+				}
+			} catch (e) {
+				// Skip malformed JSON
+			}
+
+			return responses;
+		};
 
 		try {
 			while (true) {
@@ -358,53 +570,39 @@ export class SarvamLlm extends BaseLlm {
 
 				buffer += decoder.decode(value, { stream: true });
 
-				// Process complete SSE messages
-				const lines = buffer.split("\n");
-				buffer = lines.pop() || ""; // Keep incomplete line in buffer
+				const lines = buffer.split(/\r?\n/);
+				buffer = lines.pop() || "";
 
 				for (const line of lines) {
-					if (line.startsWith("data: ")) {
-						const data = line.slice(6).trim();
+					if (line.startsWith("data:")) {
+						eventDataLines.push(line.slice(5).trimStart());
+					} else if (line === "") {
+						const data = eventDataLines.join("\n").trim();
+						eventDataLines = [];
 
-						if (data === "[DONE]") {
-							yield { turnComplete: true };
-							continue;
-						}
-
-						if (data) {
-							try {
-								const chunk = JSON.parse(data) as SarvamStreamChunk;
-								if (this.log) {
-									console.log(
-										"[SarvamLlm] stream chunk:",
-										JSON.stringify(chunk.choices[0]?.delta, null, 2),
-									);
-								}
-								yield this.convertStreamChunkToLlmResponse(chunk);
-							} catch (e) {
-								// Skip malformed JSON
-							}
+						const responses = handleData(data);
+						for (const response of responses) {
+							yield response;
 						}
 					}
 				}
 			}
 
-			// Process any remaining buffer
-			if (buffer.startsWith("data: ")) {
-				const data = buffer.slice(6).trim();
-				if (data && data !== "[DONE]") {
-					try {
-						const chunk = JSON.parse(data) as SarvamStreamChunk;
-						if (this.log) {
-							console.log(
-								"[SarvamLlm] stream chunk (final):",
-								JSON.stringify(chunk, null, 2),
-							);
-						}
-						yield this.convertStreamChunkToLlmResponse(chunk);
-					} catch (e) {
-						// Skip malformed JSON
-					}
+			// Flush any pending event data
+			if (eventDataLines.length > 0) {
+				const data = eventDataLines.join("\n").trim();
+				const responses = handleData(data, true);
+				for (const response of responses) {
+					yield response;
+				}
+			}
+
+			// Process any remaining buffer as a last line
+			if (buffer.trim().length > 0 && buffer.startsWith("data:")) {
+				const data = buffer.slice(5).trim();
+				const responses = handleData(data, true);
+				for (const response of responses) {
+					yield response;
 				}
 			}
 		} finally {
@@ -448,8 +646,9 @@ export class SarvamLlm extends BaseLlm {
 				parts: delta.tool_calls.map((toolCall) => ({
 					functionCall: {
 						name: toolCall.function.name,
-						args: JSON.parse(toolCall.function.arguments),
-					},
+						args: this.safeJsonParse(toolCall.function.arguments),
+						id: toolCall.id,
+					} as any,
 				})),
 			};
 		}
@@ -493,8 +692,9 @@ export class SarvamLlm extends BaseLlm {
 				parts: choice.message.tool_calls.map((toolCall) => ({
 					functionCall: {
 						name: toolCall.function.name,
-						args: JSON.parse(toolCall.function.arguments),
-					},
+						args: this.safeJsonParse(toolCall.function.arguments),
+						id: toolCall.id,
+					} as any,
 				})),
 			};
 		}

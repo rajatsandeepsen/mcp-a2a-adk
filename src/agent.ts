@@ -5,7 +5,7 @@ import { getWeatherTool } from "./tools";
 export const rootAgent = new LlmAgent({
 	name: "an_agent",
 	model: new SarvamLlm("sarvam-30b", {
-		log: true,
+		// log: true,
 	}),
 	instruction:
 		"You are a helpful assistant. Answer user questions using tools when needed.",

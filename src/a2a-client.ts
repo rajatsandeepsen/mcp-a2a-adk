@@ -6,4 +6,4 @@ const result = await generateText({
 	prompt: "What weather at kottayam",
 });
 
-console.log(JSON.stringify(result, null, 2));
+console.log(result.text);
