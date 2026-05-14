@@ -1,0 +1,28 @@
+{
+	"name": "mcp-a2a-adk",
+	"module": "index.ts",
+	"type": "module",
+	"private": true,
+	"scripts": {
+		"mcp-server": "bun run --hot ./src/mcp.ts",
+		"agent": "adk run ./src/agent.ts",
+		"a2a-server": "bun run --hot ./src/a2a-server.ts",
+		"a2a-client": "bun run ./src/a2a-client.ts",
+		"web": "adk web"
+	},
+	"devDependencies": {
+		"@google/adk-devtools": "^1.1.0",
+		"@types/bun": "latest"
+	},
+	"peerDependencies": {
+		"typescript": "^5"
+	},
+	"dependencies": {
+		"@cfworker/json-schema": "^4.1.1",
+		"@google/adk": "^1.1.0",
+		"@modelcontextprotocol/server": "^2.0.0-alpha.2",
+		"a2a-ai-provider": "^0.4.0-alpha.2",
+		"ai": "^6.0.182",
+		"zod": "^4.4.3"
+	}
+}
