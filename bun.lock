@@ -10,6 +10,7 @@
         "@modelcontextprotocol/server": "^2.0.0-alpha.2",
         "a2a-ai-provider": "^0.4.0-alpha.2",
         "ai": "^6.0.182",
+        "sarvam-ai-sdk": "^0.3.1",
         "zod": "^4.4.3",
       },
       "devDependencies": {
@@ -903,6 +904,8 @@
     "safe-stable-stringify": ["safe-stable-stringify@2.5.0", "", {}, "sha512-b3rppTKm9T+PsVCBEOUR46GWI7fdOs00VKZ1+9c1EWDaDMvjQc6tUwuFyIprgGgTcWoVHSKrU8H31ZHA2e0RHA=="],
 
     "safer-buffer": ["safer-buffer@2.1.2", "", {}, "sha512-YZo3K82SD7Riyi0E1EQPojLz7kpepnSQI9IyPbHHg1XXXevb5dJI7tpyN2ADxGcQbHG7vcyRHk0cbwqcQriUtg=="],
+
+    "sarvam-ai-sdk": ["sarvam-ai-sdk@0.3.1", "", { "dependencies": { "@ai-sdk/provider": "^3.0.0", "@ai-sdk/provider-utils": "^4.0.0" }, "peerDependencies": { "ai": "^6.0.0", "zod": "^3.25.0 || ^4.0.0" } }, "sha512-XPhZvtY9DM4bRt56g6/nDXhzn78NZAEo9G9H/X8ObhpwTMU5P2yJg20OkoYsXBioyD++GWFKrwCZxzDHesOqYQ=="],
 
     "semver": ["semver@7.8.0", "", { "bin": { "semver": "bin/semver.js" } }, "sha512-AcM7dV/5ul4EekoQ29Agm5vri8JNqRyj39o0qpX6vDF2GZrtutZl5RwgD1XnZjiTAfncsJhMI48QQH3sN87YNA=="],
 
