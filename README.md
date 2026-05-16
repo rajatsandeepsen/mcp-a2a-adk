@@ -1,13 +1,19 @@
 # mpc-a2a-adk
 - [What is AI Engineer](https://www.latent.space/p/ai-engineer)
 
+![Image](/images/phase-2.png)
+
 ## MCP
+
+![Image](/images/phase-3.5.png)
 
 - [MCP Official Website](https://modelcontextprotocol.io)
 - [MCP UI - AI Engineer YT](https://youtu.be/o-zkvb0iFDQ)
 - [MCP UI Guide](https://mcpui.dev/guide/server/typescript/overview)
 
 ## A2A Protocol
+
+![Image](/images/phase-5.png)
 
 - [Agent2Agent Protocol - A2A by Google](https://a2a-protocol.org)
 - [AI Agent Protocols Explained: MCP, A2A, ACP and More](https://youtu.be/tb0c70DROYE)
